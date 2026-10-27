@@ -94,3 +94,7 @@ compile_commands.json
 # running tests results in this
 tests/unit_tests/dependencies
 tests/unit_tests/default.profraw
+/rust/target/
+/rust/out/
+/rust/lib/
+/rust/dependencies/

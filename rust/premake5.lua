@@ -1,0 +1,10 @@
+dofile('../premake5_v2.lua')
+dofile('../renderer/premake5_pls_renderer.lua')
+dofile('../decoders/premake5_v2.lua')
+
+project('rive_native')
+kind('SharedLib')
+files({ 'native.cpp' })
+includedirs({ '../include', '../renderer/include', miniaudio })
+links({ 'rive', 'rive_pls_renderer', 'rive_decoders', 'rive_harfbuzz', 'rive_sheenbidi', 'rive_yoga', 'miniaudio', 'libpng', 'zlib', 'libjpeg', 'libwebp', 'd3d11', 'dxgi', 'd3dcompiler', 'dxguid', 'dcomp', 'ole32', 'user32', 'winmm', 'avrt' })
+defines({ 'NOMINMAX', 'WIN32_LEAN_AND_MEAN' })

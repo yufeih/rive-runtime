@@ -5,6 +5,7 @@
 #pragma once
 
 #include "rive/renderer/render_context.hpp"
+#include "rive/renderer/texture.hpp"
 #include "rive/gpu_texture_format.hpp"
 
 #ifdef RIVE_CANVAS
