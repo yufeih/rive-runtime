@@ -14,6 +14,8 @@
 using namespace rive;
 
 static std::atomic<uint32_t> s_bufferFrames{0};
+static rcp<AudioEngine> m_runtimeAudioEngine;
+static bool s_runtimeAudioEnabled = true;
 
 void AudioEngine::SetBufferFrames(uint32_t frames) { s_bufferFrames = frames; }
 
@@ -304,6 +306,10 @@ rcp<AudioSound> AudioEngine::internalPlaySound(
     uint64_t soundStartTime,
     Artboard* artboard)
 {
+  if (!s_runtimeAudioEnabled && this == m_runtimeAudioEngine.get())
+  {
+    return nullptr;
+  }
   std::unique_lock<std::mutex> lock(m_mutex);
   // We have to dispose completed sounds out of the completed callback. So we
   // do it on next play or at destruct.
@@ -580,8 +586,6 @@ float AudioEngine::timeInSeconds()
   return ma_engine_get_time_in_milliseconds(m_engine) / 1000.0f;
 }
 
-static rcp<AudioEngine> m_runtimeAudioEngine;
-
 rcp<AudioEngine> AudioEngine::MakeAndStore(
     uint32_t numChannels,
     uint32_t sampleRate)
@@ -599,6 +603,10 @@ rcp<AudioEngine> AudioEngine::MakeAndStore(
 
 rcp<AudioEngine> AudioEngine::RuntimeEngine(bool makeWhenNecessary)
 {
+  if (!s_runtimeAudioEnabled)
+  {
+    return nullptr;
+  }
   if (!makeWhenNecessary)
   {
     return m_runtimeAudioEngine;
@@ -614,6 +622,29 @@ rcp<AudioEngine> AudioEngine::RuntimeEngine(bool makeWhenNecessary)
     m_runtimeAudioEngine = AudioEngine::Make(defaultNumChannels, sampleRate);
   }
   return m_runtimeAudioEngine;
+}
+
+int AudioEngine::SetRuntimeEnabled(bool enabled)
+{
+  if (s_runtimeAudioEnabled == enabled)
+  {
+    return MA_SUCCESS;
+  }
+  if (m_runtimeAudioEngine != nullptr)
+  {
+    auto result = enabled ? ma_engine_start(m_runtimeAudioEngine->engine()) :
+                            ma_engine_stop(m_runtimeAudioEngine->engine());
+    if (result != MA_SUCCESS)
+    {
+      return result;
+    }
+    if (!enabled)
+    {
+      m_runtimeAudioEngine->stop(nullptr);
+    }
+  }
+  s_runtimeAudioEnabled = enabled;
+  return MA_SUCCESS;
 }
 
 void AudioEngine::ReleaseRuntimeEngine() { m_runtimeAudioEngine = nullptr; }

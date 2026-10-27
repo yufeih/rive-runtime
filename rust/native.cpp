@@ -10,7 +10,6 @@
 #include "rive/renderer/render_context.hpp"
 #include "rive/renderer/d3d11/render_context_d3d_impl.hpp"
 #include "rive/renderer/rive_renderer.hpp"
-#include "miniaudio.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace rive;
@@ -146,10 +145,7 @@ API HRESULT rive_surface_present(Surface* surface, float) {
 }
 
 API HRESULT rive_audio_set_muted(bool muted) {
-    auto engine = AudioEngine::RuntimeEngine();
-    if (!engine) return E_UNEXPECTED;
-    auto result = ma_engine_set_volume(engine->engine(), muted ? 0.0f : 1.0f);
-    return result == MA_SUCCESS ? S_OK : E_FAIL;
+    return static_cast<HRESULT>(AudioEngine::SetRuntimeEnabled(!muted));
 }
 API File* loadRiveFile(const uint8_t* bytes, uint64_t size, Factory* factory, void*, void*) {
     return File::import(Span<const uint8_t>(bytes, size), factory).release();

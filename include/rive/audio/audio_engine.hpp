@@ -81,6 +81,7 @@ public:
       Artboard* artboard = nullptr);
 
   static rcp<AudioEngine> RuntimeEngine(bool makeWhenNecessary = true);
+  static int SetRuntimeEnabled(bool enabled);
   static void ReleaseRuntimeEngine();
 
   /// Mixes renderer in until detachRenderer, which the renderer outlives.
