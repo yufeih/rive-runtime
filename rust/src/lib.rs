@@ -5,7 +5,10 @@ use std::{
     sync::Mutex,
     time::Duration,
 };
-use windows::{Win32::Foundation::HWND, core::HRESULT};
+use windows::{
+    Win32::{Foundation::HWND, UI::HiDpi::GetDpiForWindow},
+    core::HRESULT,
+};
 
 static RUNTIME: Mutex<()> = Mutex::new(());
 
@@ -300,10 +303,15 @@ impl Renderer {
 
     fn draw(&mut self, elapsed: Duration) -> Result<f32> {
         unsafe {
+            let dpi = GetDpiForWindow(self.window);
+            if dpi == 0 {
+                return Err(io::Error::last_os_error().into());
+            }
             (self.api.advance)(self.machine, elapsed.as_secs_f32());
             let native = required(rive_surface_begin(self.surface))?;
             let scale = (self.size[0] as f32 / self.dimensions[0])
-                .min(self.size[1] as f32 / self.dimensions[1]);
+                .min(self.size[1] as f32 / self.dimensions[1])
+                .min(dpi as f32 / 96.0);
             (self.api.save)(native);
             (self.api.transform)(
                 native,
@@ -311,8 +319,8 @@ impl Renderer {
                 0.0,
                 0.0,
                 scale,
-                (self.size[0] as f32 - self.dimensions[0] * scale) * 0.5,
-                (self.size[1] as f32 - self.dimensions[1] * scale) * 0.5,
+                ((self.size[0] as f32 - self.dimensions[0] * scale) * 0.5).round(),
+                ((self.size[1] as f32 - self.dimensions[1] * scale) * 0.5).round(),
             );
             (self.api.draw)(self.artboard, native);
             (self.api.restore)(native);

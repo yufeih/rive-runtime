@@ -1,6 +1,6 @@
 [package]
 name = "rive"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Windows x64 Rust bindings for the Rive C++ runtime and D3D11 renderer"
 links = "rive_native"
@@ -10,4 +10,4 @@ include = ["/src/**", "/build.rs", "/lib/**", "/Cargo.toml", "/LICENSE"]
 
 [dependencies]
 anyhow = "1"
-windows = { version = "0.62", features = ["Win32_Foundation"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_HiDpi"] }
