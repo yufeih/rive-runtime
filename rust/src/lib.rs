@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::{
     ffi::{CString, c_void},
     io, ptr,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use windows::{
@@ -68,18 +68,24 @@ api! {
     delete_file: unsafe extern "C" fn(Handle) = "deleteRiveFile",
 }
 
-pub struct Renderer {
+pub struct Surface {
+    native: Arc<NativeSurface>,
+    size: [u32; 2],
+    window: HWND,
+}
+
+pub struct Animation {
     api: Api,
-    surface: Handle,
+    surface: Arc<NativeSurface>,
     file: Handle,
     artboard: Handle,
     machine: Handle,
     model: Handle,
     instance: Handle,
     dimensions: [f32; 2],
-    size: [u32; 2],
-    window: HWND,
 }
+
+struct NativeSurface(Handle);
 
 unsafe extern "C" {
     fn rive_audio_set_muted(muted: bool) -> HRESULT;
@@ -108,21 +114,7 @@ fn required(handle: Handle) -> Result<Handle> {
     }
 }
 
-impl Renderer {
-    pub fn for_window(bytes: &[u8], window: HWND) -> Result<Self> {
-        let mut size = [0; 2];
-        unsafe {
-            rive_window_size(window, &mut size[0], &mut size[1]).ok()?;
-        }
-        Self::new(bytes, window, size)
-    }
-
-    pub fn offscreen(bytes: &[u8]) -> Result<Self> {
-        let mut renderer = Self::new(bytes, HWND::default(), [1, 1])?;
-        renderer.resize(renderer.dimensions.map(|value| value.ceil() as u32))?;
-        Ok(renderer)
-    }
-
+impl Animation {
     pub fn dimensions(&self) -> [f32; 2] {
         self.dimensions
     }
@@ -233,20 +225,6 @@ impl Renderer {
         Ok(true)
     }
 
-    pub fn present(&mut self, elapsed: Duration) -> Result<()> {
-        let mut size = [0; 2];
-        unsafe {
-            rive_window_size(self.window, &mut size[0], &mut size[1]).ok()?;
-        }
-        self.resize(size)?;
-        let _guard = RUNTIME.lock().unwrap();
-        let scale = self.draw(elapsed)?;
-        unsafe {
-            rive_surface_present(self.surface, scale).ok()?;
-        }
-        Ok(())
-    }
-
     pub fn advance(&mut self, elapsed: Duration) {
         let _guard = RUNTIME.lock().unwrap();
         unsafe {
@@ -254,46 +232,24 @@ impl Renderer {
         }
     }
 
-    pub fn screenshot(&mut self) -> Result<Vec<u8>> {
-        let mut pixels = vec![0; self.size[0] as usize * self.size[1] as usize * 4];
-        let _guard = RUNTIME.lock().unwrap();
-        self.draw(Duration::ZERO)?;
-        unsafe {
-            rive_surface_read_rgba(self.surface, pixels.as_mut_ptr(), pixels.len()).ok()?;
-        }
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            let alpha = u32::from(pixel[3]);
-            for channel in &mut pixel[..3] {
-                *channel = match (u32::from(*channel) * 255 + alpha / 2).checked_div(alpha) {
-                    Some(value) => value.min(255) as u8,
-                    None => 0,
-                };
-            }
-        }
-        Ok(pixels)
-    }
-
-    fn new(bytes: &[u8], window: HWND, size: [u32; 2]) -> Result<Self> {
-        if bytes.is_empty() || size.contains(&0) || size.iter().any(|&v| v > 16384) {
+    fn new(bytes: &[u8], surface: Arc<NativeSurface>) -> Result<Self> {
+        if bytes.is_empty() {
             return Err(io::Error::from(io::ErrorKind::InvalidInput).into());
         }
         let mut renderer = Self {
             api: Api::new(),
-            surface: ptr::null_mut(),
+            surface,
             file: ptr::null_mut(),
             artboard: ptr::null_mut(),
             machine: ptr::null_mut(),
             model: ptr::null_mut(),
             instance: ptr::null_mut(),
             dimensions: [0.0; 2],
-            size,
-            window,
         };
         {
             let _guard = RUNTIME.lock().unwrap();
             unsafe {
-                rive_surface_create(window, size[0], size[1], &mut renderer.surface).ok()?;
-                let factory = required(rive_surface_factory(renderer.surface))?;
+                let factory = required(rive_surface_factory(renderer.surface.0))?;
                 renderer.file = required((renderer.api.load)(
                     bytes.as_ptr(),
                     bytes.len() as u64,
@@ -323,6 +279,85 @@ impl Renderer {
         }
         Ok(renderer)
     }
+}
+
+impl Surface {
+    pub fn for_window(window: HWND) -> Result<Self> {
+        let mut size = [0; 2];
+        unsafe {
+            rive_window_size(window, &mut size[0], &mut size[1]).ok()?;
+        }
+        Self::new(window, size)
+    }
+
+    pub fn offscreen() -> Result<Self> {
+        Self::new(HWND::default(), [1, 1])
+    }
+
+    pub fn load(&self, bytes: &[u8]) -> Result<Animation> {
+        Animation::new(bytes, self.native.clone())
+    }
+
+    pub fn present(&mut self, animation: &mut Animation, elapsed: Duration) -> Result<()> {
+        self.validate(animation)?;
+        let mut size = [0; 2];
+        unsafe {
+            rive_window_size(self.window, &mut size[0], &mut size[1]).ok()?;
+        }
+        self.resize(size)?;
+        let _guard = RUNTIME.lock().unwrap();
+        let scale = self.draw(animation, elapsed)?;
+        unsafe {
+            rive_surface_present(self.native.0, scale).ok()?;
+        }
+        Ok(())
+    }
+
+    pub fn screenshot(&mut self, animation: &mut Animation) -> Result<Vec<u8>> {
+        self.validate(animation)?;
+        self.resize(animation.dimensions.map(|value| value.ceil() as u32))?;
+        let mut pixels = vec![0; self.size[0] as usize * self.size[1] as usize * 4];
+        let _guard = RUNTIME.lock().unwrap();
+        self.draw(animation, Duration::ZERO)?;
+        unsafe {
+            rive_surface_read_rgba(self.native.0, pixels.as_mut_ptr(), pixels.len()).ok()?;
+        }
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            let alpha = u32::from(pixel[3]);
+            for channel in &mut pixel[..3] {
+                *channel = match (u32::from(*channel) * 255 + alpha / 2).checked_div(alpha) {
+                    Some(value) => value.min(255) as u8,
+                    None => 0,
+                };
+            }
+        }
+        Ok(pixels)
+    }
+
+    fn new(window: HWND, size: [u32; 2]) -> Result<Self> {
+        if size.contains(&0) || size.iter().any(|&value| value > 16384) {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput).into());
+        }
+        let mut native = ptr::null_mut();
+        {
+            let _guard = RUNTIME.lock().unwrap();
+            unsafe {
+                rive_surface_create(window, size[0], size[1], &mut native).ok()?;
+            }
+        }
+        Ok(Self {
+            native: Arc::new(NativeSurface(native)),
+            size,
+            window,
+        })
+    }
+
+    fn validate(&self, animation: &Animation) -> Result<()> {
+        if !Arc::ptr_eq(&self.native, &animation.surface) {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput).into());
+        }
+        Ok(())
+    }
 
     fn resize(&mut self, size: [u32; 2]) -> Result<()> {
         if size.contains(&0) || size.iter().any(|&v| v > 16384) {
@@ -331,14 +366,14 @@ impl Renderer {
         if self.size != size {
             let _guard = RUNTIME.lock().unwrap();
             unsafe {
-                rive_surface_resize(self.surface, size[0], size[1]).ok()?;
+                rive_surface_resize(self.native.0, size[0], size[1]).ok()?;
             }
             self.size = size;
         }
         Ok(())
     }
 
-    fn draw(&mut self, elapsed: Duration) -> Result<f32> {
+    fn draw(&mut self, animation: &mut Animation, elapsed: Duration) -> Result<f32> {
         unsafe {
             let max_scale = match self.window.is_invalid() {
                 true => f32::INFINITY,
@@ -350,29 +385,29 @@ impl Renderer {
                     dpi as f32 / 96.0
                 }
             };
-            (self.api.advance)(self.machine, elapsed.as_secs_f32());
-            let native = required(rive_surface_begin(self.surface))?;
-            let scale = (self.size[0] as f32 / self.dimensions[0])
-                .min(self.size[1] as f32 / self.dimensions[1])
+            (animation.api.advance)(animation.machine, elapsed.as_secs_f32());
+            let native = required(rive_surface_begin(self.native.0))?;
+            let scale = (self.size[0] as f32 / animation.dimensions[0])
+                .min(self.size[1] as f32 / animation.dimensions[1])
                 .min(max_scale);
-            (self.api.save)(native);
-            (self.api.transform)(
+            (animation.api.save)(native);
+            (animation.api.transform)(
                 native,
                 scale,
                 0.0,
                 0.0,
                 scale,
-                ((self.size[0] as f32 - self.dimensions[0] * scale) * 0.5).round(),
-                ((self.size[1] as f32 - self.dimensions[1] * scale) * 0.5).round(),
+                ((self.size[0] as f32 - animation.dimensions[0] * scale) * 0.5).round(),
+                ((self.size[1] as f32 - animation.dimensions[1] * scale) * 0.5).round(),
             );
-            (self.api.draw)(self.artboard, native);
-            (self.api.restore)(native);
+            (animation.api.draw)(animation.artboard, native);
+            (animation.api.restore)(native);
             Ok(scale)
         }
     }
 }
 
-impl Drop for Renderer {
+impl Drop for Animation {
     fn drop(&mut self) {
         let _guard = RUNTIME.lock().unwrap();
         unsafe {
@@ -387,11 +422,20 @@ impl Drop for Renderer {
                     delete(handle);
                 }
             }
-            if !self.surface.is_null() {
-                rive_surface_destroy(self.surface);
-            }
         }
     }
 }
 
-unsafe impl Send for Renderer {}
+impl Drop for NativeSurface {
+    fn drop(&mut self) {
+        let _guard = RUNTIME.lock().unwrap();
+        unsafe {
+            rive_surface_destroy(self.0);
+        }
+    }
+}
+
+unsafe impl Send for Surface {}
+unsafe impl Send for Animation {}
+unsafe impl Send for NativeSurface {}
+unsafe impl Sync for NativeSurface {}

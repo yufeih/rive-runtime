@@ -10,7 +10,8 @@ fn main() -> Result<()> {
         .next()
         .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
     rive::set_audio_enabled(false)?;
-    let mut renderer = rive::Renderer::offscreen(&fs::read(input)?)?;
+    let mut surface = rive::Surface::offscreen()?;
+    let mut renderer = surface.load(&fs::read(input)?)?;
     for arg in args {
         let arg = arg
             .to_str()
@@ -33,7 +34,7 @@ fn main() -> Result<()> {
     for _ in 0..60 {
         renderer.advance(Duration::from_secs_f64(1.0 / 60.0));
     }
-    let pixels = renderer.screenshot()?;
+    let pixels = surface.screenshot(&mut renderer)?;
     let [width, height] = renderer.dimensions().map(|value| value.ceil() as u32);
     let mut encoder = png::Encoder::new(fs::File::create(output)?, width, height);
     encoder.set_color(png::ColorType::Rgba);
