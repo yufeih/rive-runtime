@@ -98,3 +98,6 @@ tests/unit_tests/default.profraw
 /rust/out/
 /rust/lib/
 /rust/dependencies/
+
+/rust/bin/
+/rust/Cargo.lock

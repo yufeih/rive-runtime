@@ -90,6 +90,7 @@ unsafe extern "C" {
     fn rive_surface_begin(surface: Handle) -> Handle;
     fn rive_window_size(window: HWND, width: *mut u32, height: *mut u32) -> HRESULT;
     fn rive_surface_present(surface: Handle, scale: f32) -> HRESULT;
+    fn rive_surface_read_rgba(surface: Handle, pixels: *mut u8, length: usize) -> HRESULT;
 }
 
 pub fn set_audio_enabled(enabled: bool) -> Result<()> {
@@ -113,53 +114,12 @@ impl Renderer {
         unsafe {
             rive_window_size(window, &mut size[0], &mut size[1]).ok()?;
         }
-        if bytes.is_empty() || size.contains(&0) || size.iter().any(|&v| v > 16384) {
-            return Err(io::Error::from(io::ErrorKind::InvalidInput).into());
-        }
-        let mut renderer = Self {
-            api: Api::new(),
-            surface: ptr::null_mut(),
-            file: ptr::null_mut(),
-            artboard: ptr::null_mut(),
-            machine: ptr::null_mut(),
-            model: ptr::null_mut(),
-            instance: ptr::null_mut(),
-            dimensions: [0.0; 2],
-            size,
-            window,
-        };
-        {
-            let _guard = RUNTIME.lock().unwrap();
-            unsafe {
-                rive_surface_create(window, size[0], size[1], &mut renderer.surface).ok()?;
-                let factory = required(rive_surface_factory(renderer.surface))?;
-                renderer.file = required((renderer.api.load)(
-                    bytes.as_ptr(),
-                    bytes.len() as u64,
-                    factory,
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                ))?;
-                renderer.artboard = required((renderer.api.artboard)(renderer.file, false))?;
-                renderer.machine = required((renderer.api.machine)(renderer.artboard))?;
-                renderer.model = (renderer.api.model)(renderer.file, renderer.artboard);
-                if !renderer.model.is_null() {
-                    renderer.instance = required((renderer.api.instance)(renderer.model))?;
-                    (renderer.api.bind)(renderer.machine, renderer.instance);
-                }
-                renderer.dimensions = [
-                    (renderer.api.width)(renderer.artboard),
-                    (renderer.api.height)(renderer.artboard),
-                ];
-                if renderer
-                    .dimensions
-                    .iter()
-                    .any(|v| !v.is_finite() || *v <= 0.0)
-                {
-                    return Err(io::Error::from(io::ErrorKind::InvalidData).into());
-                }
-            }
-        }
+        Self::new(bytes, window, size)
+    }
+
+    pub fn offscreen(bytes: &[u8]) -> Result<Self> {
+        let mut renderer = Self::new(bytes, HWND::default(), [1, 1])?;
+        renderer.resize(renderer.dimensions.map(|value| value.ceil() as u32))?;
         Ok(renderer)
     }
 
@@ -287,6 +247,83 @@ impl Renderer {
         Ok(())
     }
 
+    pub fn advance(&mut self, elapsed: Duration) {
+        let _guard = RUNTIME.lock().unwrap();
+        unsafe {
+            (self.api.advance)(self.machine, elapsed.as_secs_f32());
+        }
+    }
+
+    pub fn screenshot(&mut self) -> Result<Vec<u8>> {
+        let mut pixels = vec![0; self.size[0] as usize * self.size[1] as usize * 4];
+        let _guard = RUNTIME.lock().unwrap();
+        self.draw(Duration::ZERO)?;
+        unsafe {
+            rive_surface_read_rgba(self.surface, pixels.as_mut_ptr(), pixels.len()).ok()?;
+        }
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            let alpha = u32::from(pixel[3]);
+            for channel in &mut pixel[..3] {
+                *channel = match (u32::from(*channel) * 255 + alpha / 2).checked_div(alpha) {
+                    Some(value) => value.min(255) as u8,
+                    None => 0,
+                };
+            }
+        }
+        Ok(pixels)
+    }
+
+    fn new(bytes: &[u8], window: HWND, size: [u32; 2]) -> Result<Self> {
+        if bytes.is_empty() || size.contains(&0) || size.iter().any(|&v| v > 16384) {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput).into());
+        }
+        let mut renderer = Self {
+            api: Api::new(),
+            surface: ptr::null_mut(),
+            file: ptr::null_mut(),
+            artboard: ptr::null_mut(),
+            machine: ptr::null_mut(),
+            model: ptr::null_mut(),
+            instance: ptr::null_mut(),
+            dimensions: [0.0; 2],
+            size,
+            window,
+        };
+        {
+            let _guard = RUNTIME.lock().unwrap();
+            unsafe {
+                rive_surface_create(window, size[0], size[1], &mut renderer.surface).ok()?;
+                let factory = required(rive_surface_factory(renderer.surface))?;
+                renderer.file = required((renderer.api.load)(
+                    bytes.as_ptr(),
+                    bytes.len() as u64,
+                    factory,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                ))?;
+                renderer.artboard = required((renderer.api.artboard)(renderer.file, false))?;
+                renderer.machine = required((renderer.api.machine)(renderer.artboard))?;
+                renderer.model = (renderer.api.model)(renderer.file, renderer.artboard);
+                if !renderer.model.is_null() {
+                    renderer.instance = required((renderer.api.instance)(renderer.model))?;
+                    (renderer.api.bind)(renderer.machine, renderer.instance);
+                }
+                renderer.dimensions = [
+                    (renderer.api.width)(renderer.artboard),
+                    (renderer.api.height)(renderer.artboard),
+                ];
+                if renderer
+                    .dimensions
+                    .iter()
+                    .any(|v| !v.is_finite() || *v <= 0.0)
+                {
+                    return Err(io::Error::from(io::ErrorKind::InvalidData).into());
+                }
+            }
+        }
+        Ok(renderer)
+    }
+
     fn resize(&mut self, size: [u32; 2]) -> Result<()> {
         if size.contains(&0) || size.iter().any(|&v| v > 16384) {
             return Err(io::Error::from(io::ErrorKind::InvalidInput).into());
@@ -303,15 +340,21 @@ impl Renderer {
 
     fn draw(&mut self, elapsed: Duration) -> Result<f32> {
         unsafe {
-            let dpi = GetDpiForWindow(self.window);
-            if dpi == 0 {
-                return Err(io::Error::last_os_error().into());
-            }
+            let max_scale = match self.window.is_invalid() {
+                true => f32::INFINITY,
+                false => {
+                    let dpi = GetDpiForWindow(self.window);
+                    if dpi == 0 {
+                        return Err(io::Error::last_os_error().into());
+                    }
+                    dpi as f32 / 96.0
+                }
+            };
             (self.api.advance)(self.machine, elapsed.as_secs_f32());
             let native = required(rive_surface_begin(self.surface))?;
             let scale = (self.size[0] as f32 / self.dimensions[0])
                 .min(self.size[1] as f32 / self.dimensions[1])
-                .min(dpi as f32 / 96.0);
+                .min(max_scale);
             (self.api.save)(native);
             (self.api.transform)(
                 native,

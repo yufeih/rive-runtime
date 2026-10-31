@@ -18,5 +18,10 @@ Get-ChildItem dependencies -Directory | ForEach-Object {
         Where-Object Name -Match '^(LICENSE|COPYING|NOTICE|PATENTS|README)([.-]|$)' |
         Copy-Item -Destination $destination
 }
+cargo build --release --bins
+if ($LASTEXITCODE) { throw "Screenshot build failed: $LASTEXITCODE" }
+New-Item -ItemType Directory -Force bin | Out-Null
+Copy-Item target/release/rive-screenshot.exe bin
+Copy-Item lib/rive_native.dll target/release
 cargo package --allow-dirty
 if ($LASTEXITCODE) { throw "Crate packaging failed: $LASTEXITCODE" }

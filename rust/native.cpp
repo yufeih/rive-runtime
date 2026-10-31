@@ -90,8 +90,10 @@ static HRESULT attach_window(Surface* surface, HWND window) {
 API HRESULT rive_surface_resize(Surface* surface, uint32_t width, uint32_t height) {
     surface->renderTarget = nullptr;
     surface->context->ClearState();
-    auto hr = surface->compositionSwapchain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
-    if (FAILED(hr)) return hr;
+    if (surface->compositionSwapchain) {
+        auto hr = surface->compositionSwapchain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+        if (FAILED(hr)) return hr;
+    }
     surface->width = width;
     surface->height = height;
     return S_OK;
@@ -116,7 +118,7 @@ API HRESULT rive_surface_create(HWND window, uint32_t width, uint32_t height, Su
     surface->renderer = std::make_unique<RiveRenderer>(surface->runtime.get());
     surface->width = width;
     surface->height = height;
-    if (FAILED(hr = attach_window(surface.get(), window))) return hr;
+    if (window && FAILED(hr = attach_window(surface.get(), window))) return hr;
     *output = surface.release();
     return S_OK;
 }
@@ -127,6 +129,7 @@ API Renderer* rive_surface_begin(Surface* surface) {
     gpu::RenderContext::FrameDescriptor frame{};
     frame.renderTargetWidth = surface->width;
     frame.renderTargetHeight = surface->height;
+    frame.clearColor = 0;
     surface->runtime->beginFrame(frame);
     return surface->renderer.get();
 }
@@ -142,6 +145,40 @@ API HRESULT rive_surface_present(Surface* surface, float) {
     resources.renderTarget = surface->renderTarget.get();
     surface->runtime->flush(resources);
     return surface->compositionSwapchain->Present(1, 0);
+}
+
+API HRESULT rive_surface_read_rgba(Surface* surface, uint8_t* pixels, size_t length) {
+    if (!pixels || length != size_t(surface->width) * surface->height * 4) return E_INVALIDARG;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = surface->width;
+    desc.Height = surface->height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
+    ComPtr<ID3D11Texture2D> texture;
+    auto hr = surface->device->CreateTexture2D(&desc, nullptr, &texture);
+    if (FAILED(hr)) return hr;
+    auto target = surface->runtime->static_impl_cast<gpu::RenderContextD3DImpl>()->makeRenderTarget(surface->width, surface->height);
+    target->setTargetTexture(texture);
+    gpu::RenderContext::FlushResources resources{};
+    resources.renderTarget = target.get();
+    surface->runtime->flush(resources);
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ComPtr<ID3D11Texture2D> staging;
+    if (FAILED(hr = surface->device->CreateTexture2D(&desc, nullptr, &staging))) return hr;
+    surface->context->CopyResource(staging.Get(), texture.Get());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(hr = surface->context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return hr;
+    for (uint32_t y = 0; y < surface->height; ++y) {
+        memcpy(pixels + size_t(y) * surface->width * 4,
+            static_cast<const uint8_t*>(mapped.pData) + size_t(y) * mapped.RowPitch, surface->width * 4);
+    }
+    surface->context->Unmap(staging.Get(), 0);
+    return S_OK;
 }
 
 API HRESULT rive_audio_set_muted(bool muted) {
