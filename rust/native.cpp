@@ -192,12 +192,15 @@ API StateMachineInstance* riveArtboardStateMachineDefault(ArtboardInstance* artb
 API ViewModelRuntime* riveFileDefaultArtboardViewModelRuntime(File* file, Artboard* artboard) { return ref_rcp(file->defaultArtboardViewModel(artboard)).release(); }
 API ViewModelInstanceRuntime* createDefaultVMIRuntime(ViewModelRuntime* model) { return model->createDefaultInstance().release(); }
 API void stateMachineSetVMIRuntime(StateMachineInstance* machine, ViewModelInstanceRuntime* instance) { machine->bindViewModelInstance(instance->instance()); }
+API void rive_artboard_mute(ArtboardInstance* artboard) { artboard->volume(0); }
+API ViewModelInstanceColorRuntime* vmiRuntimeGetColorProperty(ViewModelInstanceRuntime* instance, const char* name) { return instance ? instance->propertyColor(name) : nullptr; }
 API ViewModelInstanceNumberRuntime* vmiRuntimeGetNumberProperty(ViewModelInstanceRuntime* instance, const char* name) { return instance ? instance->propertyNumber(name) : nullptr; }
 API ViewModelInstanceBooleanRuntime* vmiRuntimeGetBooleanProperty(ViewModelInstanceRuntime* instance, const char* name) { return instance ? instance->propertyBoolean(name) : nullptr; }
 API ViewModelInstanceStringRuntime* vmiRuntimeGetStringProperty(ViewModelInstanceRuntime* instance, const char* name) { return instance ? instance->propertyString(name) : nullptr; }
 API ViewModelInstanceListRuntime* vmiRuntimeGetListProperty(ViewModelInstanceRuntime* instance, const char* name) { return instance ? instance->propertyList(name) : nullptr; }
 API size_t getVMIListRuntimeSize(ViewModelInstanceListRuntime* list) { return list->size(); }
 API ViewModelInstanceRuntime* vmiListRuntimeInstanceAt(ViewModelInstanceListRuntime* list, int index) { return list->instanceAt(index).release(); }
+API void setVMIColorRuntimeValue(ViewModelInstanceColorRuntime* value, int32_t color) { value->value(color); }
 API void setVMINumberRuntimeValue(ViewModelInstanceNumberRuntime* value, float number) { value->value(number); }
 API float getVMINumberRuntimeValue(ViewModelInstanceNumberRuntime* value) { return value->value(); }
 API void setVMIBooleanRuntimeValue(ViewModelInstanceBooleanRuntime* value, bool boolean) { value->value(boolean); }

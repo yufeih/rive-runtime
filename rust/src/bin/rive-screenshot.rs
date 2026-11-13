@@ -30,6 +30,9 @@ fn main() -> Result<()> {
         let found = match value {
             "true" => renderer.set_bool(name, true)?,
             "false" => renderer.set_bool(name, false)?,
+            value if value.starts_with('#') => {
+                renderer.set_color(name, u32::from_str_radix(&value[1..], 16)?)?
+            }
             _ => renderer.set_string(name, value)?,
         };
         if !found {

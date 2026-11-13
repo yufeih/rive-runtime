@@ -44,6 +44,8 @@ api! {
     instance: unsafe extern "C" fn(Handle) -> Handle = "createDefaultVMIRuntime",
     bind: unsafe extern "C" fn(Handle, Handle) = "stateMachineSetVMIRuntime",
     number: unsafe extern "C" fn(Handle, *const i8) -> Handle = "vmiRuntimeGetNumberProperty",
+    color: unsafe extern "C" fn(Handle, *const i8) -> Handle = "vmiRuntimeGetColorProperty",
+    set_color: unsafe extern "C" fn(Handle, i32) = "setVMIColorRuntimeValue",
     boolean: unsafe extern "C" fn(Handle, *const i8) -> Handle = "vmiRuntimeGetBooleanProperty",
     string: unsafe extern "C" fn(Handle, *const i8) -> Handle = "vmiRuntimeGetStringProperty",
     list: unsafe extern "C" fn(Handle, *const i8) -> Handle = "vmiRuntimeGetListProperty",
@@ -88,6 +90,7 @@ pub struct Animation {
 struct NativeSurface(Handle);
 
 unsafe extern "C" {
+    fn rive_artboard_mute(artboard: Handle);
     fn rive_audio_set_muted(muted: bool) -> HRESULT;
     fn rive_surface_create(window: HWND, width: u32, height: u32, output: *mut Handle) -> HRESULT;
     fn rive_surface_destroy(surface: Handle);
@@ -119,6 +122,11 @@ impl Animation {
         self.dimensions
     }
 
+    pub fn mute(&mut self) {
+        let _guard = RUNTIME.lock().unwrap();
+        unsafe { rive_artboard_mute(self.artboard) };
+    }
+
     pub fn set_number(&mut self, name: &str, value: f32) -> Result<bool> {
         if !value.is_finite() {
             return Err(io::Error::from(io::ErrorKind::InvalidInput).into());
@@ -145,6 +153,20 @@ impl Animation {
                 return Ok(false);
             }
             (self.api.set_boolean)(property, value);
+            (self.api.delete_value)(property);
+        }
+        Ok(true)
+    }
+
+    pub fn set_color(&mut self, name: &str, value: u32) -> Result<bool> {
+        let name = CString::new(name)?;
+        let _guard = RUNTIME.lock().unwrap();
+        unsafe {
+            let property = (self.api.color)(self.instance, name.as_ptr());
+            if property.is_null() {
+                return Ok(false);
+            }
+            (self.api.set_color)(property, value as i32);
             (self.api.delete_value)(property);
         }
         Ok(true)
