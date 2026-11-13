@@ -12,10 +12,15 @@ fn main() -> Result<()> {
     rive::set_audio_enabled(false)?;
     let mut surface = rive::Surface::offscreen()?;
     let mut renderer = surface.load(&fs::read(input)?)?;
+    let mut scale = 1u32;
     for arg in args {
         let arg = arg
             .to_str()
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        if let Some(value) = arg.strip_prefix("--scale=") {
+            scale = value.parse()?;
+            continue;
+        }
         let data = arg
             .strip_prefix("--data=")
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
@@ -34,8 +39,10 @@ fn main() -> Result<()> {
     for _ in 0..60 {
         renderer.advance(Duration::from_secs_f64(1.0 / 60.0));
     }
-    let pixels = surface.screenshot(&mut renderer)?;
-    let [width, height] = renderer.dimensions().map(|value| value.ceil() as u32);
+    let [width, height] = renderer
+        .dimensions()
+        .map(|value| (value.ceil() as u32).saturating_mul(scale));
+    let pixels = surface.screenshot_at_size(&mut renderer, [width, height])?;
     let mut encoder = png::Encoder::new(fs::File::create(output)?, width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);

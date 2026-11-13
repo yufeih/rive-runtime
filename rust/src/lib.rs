@@ -314,8 +314,19 @@ impl Surface {
     }
 
     pub fn screenshot(&mut self, animation: &mut Animation) -> Result<Vec<u8>> {
+        self.screenshot_at_size(
+            animation,
+            animation.dimensions.map(|value| value.ceil() as u32),
+        )
+    }
+
+    pub fn screenshot_at_size(
+        &mut self,
+        animation: &mut Animation,
+        size: [u32; 2],
+    ) -> Result<Vec<u8>> {
         self.validate(animation)?;
-        self.resize(animation.dimensions.map(|value| value.ceil() as u32))?;
+        self.resize(size)?;
         let mut pixels = vec![0; self.size[0] as usize * self.size[1] as usize * 4];
         let _guard = RUNTIME.lock().unwrap();
         self.draw(animation, Duration::ZERO)?;
